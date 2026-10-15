@@ -178,7 +178,6 @@ public:
      * @param[in] upper highest assigned subset ID + 1
      */
     inline void setUpperBound(IndexType upper) {
-        assert(upper > 0);
         if (upper - 1 < this->omega) {
             // trying to shrink omega, must ensure we do not shrink it too much
             for (IndexType e = 0; e < this->z; ++e) {

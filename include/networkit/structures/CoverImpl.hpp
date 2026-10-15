@@ -204,7 +204,6 @@ void GenericCover<IndexType>::setUpperBound(IndexType upper) {
     // I propose to drop this assert and use this->omega = (upper == 0) ? 0 : upper - 1;
     // Therefore the comparisons here should be adjusted accordingly.
     // Same for the other method in GenericPartitionImpl
-    assert(upper > 0);
     if (upper - 1 < this->omega) {
         // trying to shrink omega, must ensure we do not shrink it too much
         for (IndexType e = 0; e <= this->z; ++e) {
