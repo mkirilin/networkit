@@ -9,10 +9,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <omp.h>
@@ -23,6 +25,7 @@
 #include <networkit/auxiliary/Parallel.hpp>
 #include <networkit/auxiliary/SignalHandling.hpp>
 #include <networkit/graph/Graph.hpp>
+#include <networkit/isomorphism/RI.hpp>
 #include <networkit/isomorphism/SubgraphIsomorphism.hpp>
 #include <networkit/isomorphism/VF2.hpp>
 
@@ -377,19 +380,34 @@ TEST_F(SubgraphIsomorphismGTest, testParallelEdgesWithDisagreeingLabelsAreRefuse
     const IsomorphismTest::LabelledGraph disagreeing =
         IsomorphismTest::labelledGraphOf(4, {{0, 1, 1}, {0, 1, 4}, {1, 2, 2}, {2, 3, 1}});
 
-    for (const std::string side : {"pattern", "target"}) {
-        const IsomorphismTest::LabelledGraph &pattern = side == "pattern" ? disagreeing : plain;
-        const IsomorphismTest::LabelledGraph &target = side == "pattern" ? plain : disagreeing;
+    using Factory =
+        std::function<std::unique_ptr<SubgraphIsomorphism>(const Graph &, const Graph &)>;
+    const std::vector<std::pair<std::string, Factory>> factories = {
+        {"VF2",
+         [](const Graph &pattern, const Graph &target) -> std::unique_ptr<SubgraphIsomorphism> {
+             return std::make_unique<VF2>(pattern, target, Semantics::MONOMORPHISM);
+         }},
+        {"RI",
+         [](const Graph &pattern, const Graph &target) -> std::unique_ptr<SubgraphIsomorphism> {
+             return std::make_unique<RI>(pattern, target, RI::Variant::RI, Semantics::MONOMORPHISM);
+         }}};
 
-        VF2 algo(pattern.G, target.G, Semantics::MONOMORPHISM);
-        algo.setEdgeLabels(pattern.edgeLabels, target.edgeLabels);
-        try {
-            algo.run();
-            ADD_FAILURE() << "disagreeing labels in the " << side << " were accepted";
-        } catch (const std::runtime_error &e) {
-            EXPECT_NE(std::string(e.what()).find(side), std::string::npos) << e.what();
+    for (const auto &[name, make] : factories) {
+        SCOPED_TRACE(name);
+        for (const std::string side : {"pattern", "target"}) {
+            const IsomorphismTest::LabelledGraph &pattern = side == "pattern" ? disagreeing : plain;
+            const IsomorphismTest::LabelledGraph &target = side == "pattern" ? plain : disagreeing;
+
+            std::unique_ptr<SubgraphIsomorphism> algo = make(pattern.G, target.G);
+            algo->setEdgeLabels(pattern.edgeLabels, target.edgeLabels);
+            try {
+                algo->run();
+                ADD_FAILURE() << "disagreeing labels in the " << side << " were accepted";
+            } catch (const std::runtime_error &e) {
+                EXPECT_NE(std::string(e.what()).find(side), std::string::npos) << e.what();
+            }
+            EXPECT_FALSE(algo->hasFinished());
         }
-        EXPECT_FALSE(algo.hasFinished());
     }
 }
 
