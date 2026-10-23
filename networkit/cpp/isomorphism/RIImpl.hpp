@@ -16,7 +16,9 @@ namespace NetworKit {
 namespace IsomorphismDetails {
 
 /**
- * The RI search behind @ref RI. @ref run() enumerates all matches depth first.
+ * The RI search, shared by @ref RI and @ref ParallelRI. @ref run() enumerates all matches depth
+ * first for RI. @ref expand() produces the children of one @ref State for the workers of
+ * ParallelRI, which can steal unexplored states from each other.
  */
 class RIImpl {
 
@@ -73,6 +75,13 @@ public:
 
     void run();
 
+    /// Appends the children of @a state to @a children, or reports @a state if it is complete.
+    /// Children that complete the mapping are reported right away instead, except for those of the
+    /// root. Like search(), it polls for an interrupt first and before every match. @a state must
+    /// descend from rootState(). Returns false on an interrupt or once the cap on the number of
+    /// matches is reached. Unlike run(), it does not apply cannotMatch().
+    bool expand(const State &state, std::vector<State> &children);
+
 private:
     /// The depth-first search. It keeps one level of candidates per open depth on the heap, so a
     /// large pattern cannot overflow the call stack. It returns early on an interrupt or once the
@@ -102,12 +111,17 @@ private:
 
     SubgraphIsomorphism::Semantics semantics;
 
-    /// The search only polls isRunning() and returns. The caller throws for the interrupt.
+    /// Only isRunning() may be called, since ParallelRI calls expand() inside an OpenMP region. The
+    /// caller throws for the interrupt.
     Aux::SignalHandler *handler;
 
     MatchReporter report;
 
     SubgraphIsomorphism::Match matchBuffer;
+
+    /// The candidates of the state that expand() works on. A member, so that the allocation
+    /// carries over from one call to the next.
+    std::vector<node> candidateBuffer;
 };
 
 struct RISearchSetup {

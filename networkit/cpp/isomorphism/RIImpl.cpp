@@ -294,6 +294,8 @@ RIImpl::RIImpl(const SearchGraph &pattern, const SearchGraph &target,
     : patternGraph(&pattern), targetGraph(&target), patternNodeLabels(&patternNodeLabels),
       targetNodeLabels(&targetNodeLabels), ordering(&ordering), domains(&domains),
       semantics(semantics), handler(&handler), report(std::move(report)) {
+
+    // Sized here rather than in run(), because the workers of ParallelRI only call expand().
     matchBuffer.assign(pattern.upperNodeIdBound(), none);
 }
 
@@ -370,6 +372,49 @@ void RIImpl::search() {
             return;
         }
     }
+}
+
+bool RIImpl::expand(const State &state, std::vector<State> &children) {
+    if (!handler->isRunning())
+        return false;
+
+    const count matchDepth = ordering->order.size();
+    if (state.depth == matchDepth)
+        return reportMapping(state);
+
+    candidateBuffer.clear();
+    candidatesFor(state, candidateBuffer);
+
+    // A child that completes the mapping is reported here, which saves a State per match. The
+    // children of the root stay states, so that ParallelRI deals them out even for a one-node
+    // pattern.
+    const bool reportChildren = state.depth != 0 && state.depth + 1 == matchDepth;
+    if (reportChildren)
+        for (index i = 0; i < state.depth; ++i)
+            matchBuffer[ordering->order[i]] = state.mapping[i];
+
+    for (const node tv : candidateBuffer) {
+        if (!consistent(state, tv))
+            continue;
+
+        if (reportChildren) {
+            // A slow callback must not hold up an interrupt for a whole level of candidates.
+            if (!handler->isRunning())
+                return false;
+
+            matchBuffer[ordering->order[state.depth]] = tv;
+            if (!report(matchBuffer))
+                return false;
+            continue;
+        }
+
+        State child = state;
+        child.mapping[state.depth] = tv;
+        child.depth = state.depth + 1;
+        children.push_back(std::move(child));
+    }
+
+    return true;
 }
 
 void RIImpl::candidatesFor(const State &state, std::vector<node> &out) const {
