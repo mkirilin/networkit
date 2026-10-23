@@ -105,7 +105,8 @@ cdef class SubgraphIsomorphism(Algorithm):
 	non-edges. The search finds an occurrence once per automorphism of the pattern, so a triangle
 	occurs six times.
 
-	VF2 is the reference implementation, and RI is usually faster on sparse targets.
+	VF2 is the reference implementation, and RI is usually faster on sparse targets. ParallelRI runs
+	RI on several threads and reports the matches in no fixed order.
 
 	Pattern and target must both be directed or both be undirected, and the pattern must not contain
 	self-loops. The search ignores edge weights and target self-loops, and it collapses parallel
@@ -230,8 +231,9 @@ cdef class SubgraphIsomorphism(Algorithm):
 		Like setCallback(callback), but the callback also receives the id of the worker that found
 		the match. A parallel algorithm may call the callback from several workers, and these calls
 		can overlap, so the callback must be thread-safe. The worker id is smaller than
-		numberOfWorkers(), so results that are kept per worker id need no lock. The sequential
-		algorithms always pass worker id 0.
+		numberOfWorkers(), so results that are kept per worker id need no lock. ParallelRI uses the
+		global thread count, so call numberOfWorkers() after networkit.setNumberOfThreads(). The
+		sequential algorithms always pass worker id 0.
 
 		Parameters
 		----------
@@ -358,7 +360,7 @@ cdef extern from "<networkit/isomorphism/RI.hpp>" namespace "NetworKit":
 
 class Variant(object):
 	"""
-	Variant of RI.
+	Variant of RI and ParallelRI.
 
 	- RI: Plain RI.
 	- RI_DS: RI-DS-SI-FC, which computes candidate domains with forward checking before the search.
@@ -397,3 +399,39 @@ cdef class RI(SubgraphIsomorphism):
 		self._pattern = pattern
 		self._target = target
 		self._this = new _RI(pattern._this, target._this, variant, semantics, maxMatches)
+
+cdef extern from "<networkit/isomorphism/ParallelRI.hpp>" namespace "NetworKit":
+	cdef cppclass _ParallelRI "NetworKit::ParallelRI" (_SubgraphIsomorphism):
+		_ParallelRI(const _Graph &pattern, const _Graph &target, _RIVariant variant, _Semantics semantics, count maxMatches) except +
+
+cdef class ParallelRI(SubgraphIsomorphism):
+	"""
+	ParallelRI(pattern, target, variant=networkit.isomorphism.Variant.RI,
+	           semantics=networkit.isomorphism.Semantics.INDUCED, maxMatches=0)
+
+	Parallel version of RI. It finds the same matches as RI, but their order may differ from run to
+	run. With maxMatches > 0, which matches are kept may differ as well. The number of workers is
+	the global thread count, see networkit.setNumberOfThreads(). Busy workers publish their oldest
+	partial mappings in small batches, and idle workers steal them one at a time. A callback set
+	with setCallback() makes the workers take turns, and a callback set with setParallelCallback()
+	avoids this.
+
+	Parameters
+	----------
+	pattern : networkit.Graph
+		The pattern graph. Must not contain self-loops.
+	target : networkit.Graph
+		The target graph. Must agree with pattern on directedness.
+	variant : networkit.isomorphism.Variant, optional
+		Plain RI or RI-DS. Default: networkit.isomorphism.Variant.RI
+	semantics : networkit.isomorphism.Semantics, optional
+		Whether matches must be induced. Default: networkit.isomorphism.Semantics.INDUCED
+	maxMatches : int, optional
+		Stop after this many matches; 0 means no limit. Default: 0
+	"""
+
+	def __cinit__(self, Graph pattern not None, Graph target not None, variant=_RIVariant.RI,
+				  semantics=_Semantics.INDUCED, maxMatches=0):
+		self._pattern = pattern
+		self._target = target
+		self._this = new _ParallelRI(pattern._this, target._this, variant, semantics, maxMatches)
