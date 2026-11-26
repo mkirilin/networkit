@@ -3,114 +3,15 @@ name: Build wheels
 on:
   workflow_dispatch:
 
-# Default parameters for all builds
-env:
-  ARTIFACT_RETENTION: '1'
+# Test for networkit/networkit#1591 on Windows, with the settings that master uses.
+# cibuildwheel builds the abi3 wheel once on Python 3.10. It then installs and imports
+# that same wheel on 3.11 to 3.15. The job "fix" also links the versioned Python
+# library only in test builds. Both jobs print the DLL imports of base.pyd.
 
 jobs:
-  cpython-linux-x86_64:
-    name: 'Linux CPython (${{ matrix.cibw_archs }}, ${{ matrix.manylinux_image }})'
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        cibw_archs: ["x86_64"]
-        manylinux_image: ["manylinux_2_28"]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - uses: actions/setup-python@v5
-        name: Install Python
-        with:
-          python-version: '3.13'
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v4.2.1
-        env:
-          CIBW_BEFORE_BUILD: pip install cython auditwheel --upgrade
-          CIBW_MANYLINUX_X86_64_IMAGE: ${{ matrix.manylinux_image }}
-          CIBW_ARCHS_LINUX: ${{ matrix.cibw_archs }}
-          CIBW_BUILD: 'cp315-*'
-          CIBW_SKIP: "pp* *-musllinux_*"
-          CIBW_TEST_COMMAND: python3 -c 'import networkit'
-      - uses: actions/upload-artifact@v4
-        with:
-          name: 'linux-${{ matrix.cibw_archs }}-cp315-${{ github.run_id }}'
-          path: ./wheelhouse/*cp315*.whl
-          retention-days: ${{ env.ARTIFACT_RETENTION }}
-
-  cpython-linux-aarch64:
-    name: 'Linux CPython (${{ matrix.cibw_archs }}, ${{ matrix.manylinux_image }})'
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        cibw_archs: ["aarch64"]
-        manylinux_image: ["manylinux_2_28"]
-    steps:
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: all
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - uses: actions/setup-python@v5
-        name: Install Python
-        with:
-          python-version: '3.13'
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v4.2.1
-        env:
-          CIBW_BEFORE_BUILD: pip install 'cython<3.3.0'
-          CIBW_MANYLINUX_AARCH64_IMAGE: ${{ matrix.manylinux_image }}
-          CIBW_ARCHS_LINUX: ${{ matrix.cibw_archs }}
-          CIBW_PLATFORM: ${{ 'linux' }}
-          CIBW_BUILD: 'cp315-*'
-          CIBW_SKIP: "*-musllinux_*"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: 'linux-${{ matrix.cibw_archs }}-cp315-${{ github.run_id }}'
-          path: ./wheelhouse/*cp315*.whl
-          retention-days: ${{ env.ARTIFACT_RETENTION }}
-
-  cpython-macos:
-    name: 'macOS CPython  (${{ matrix.buildplat[1] }})'
-    runs-on: ${{ matrix.buildplat[0] }}
-    strategy:
-      matrix:
-        buildplat:
-        - [macos-latest, arm64]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - uses: actions/setup-python@v5
-        name: Install Python
-        with:
-          python-version: '3.13'
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v4.2.1
-        env:
-          CIBW_BEFORE_BUILD:
-            pip install cython &&
-            brew install libomp ninja
-          CIBW_ARCHS_MACOS: ${{ matrix.buildplat[1] }}
-          CIBW_BUILD: 'cp315-*'
-          CIBW_SKIP: "pp* *-musllinux_*"
-          CIBW_TEST_COMMAND: python3 -c 'import networkit'
-          CIBW_TEST_SKIP: "*-macosx_x86_64 *-macosx_universal2:x86_64"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: 'macos-${{ matrix.buildplat[1] }}-cp315-${{ github.run_id }}'
-          path: ./wheelhouse/*cp315*.whl
-          retention-days: ${{ env.ARTIFACT_RETENTION }}
-
-
-  cpython-windows:
-    name: 'Windows CPython (${{ matrix.cibw_archs }})'
+  pr-head:
+    name: 'Windows abi3: PR head'
     runs-on: windows-latest
-    strategy:
-      matrix:
-        cibw_archs: [amd64]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -118,20 +19,76 @@ jobs:
       - name: Setup devCmd (vstools)
         uses: ilammy/msvc-dev-cmd@v1
       - uses: actions/setup-python@v5
-        name: Install Python
         with:
           python-version: '3.13'
-      - name: Build wheels
+      - name: Build on 3.10, test on 3.10 to 3.15
+        id: cibw
+        continue-on-error: true
         uses: pypa/cibuildwheel@v4.2.1
         env:
           CIBW_BEFORE_BUILD: pip install "cython<3.3.0" ipython
           CIBW_ARCHS: "AMD64"
-          CIBW_BUILD: 'cp315-*'
+          CIBW_BUILD: 'cp310-* cp311-* cp312-* cp313-* cp314-* cp315-*'
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: python .github/workflows/scripts/repair_windows_wheel.py --wheel {wheel} --dest-dir {dest_dir}
           CIBW_SKIP: pp*
           CIBW_TEST_COMMAND: python -c "import networkit"
-      - uses: actions/upload-artifact@v4
+      - name: Show the DLL imports of base.pyd
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem wheelhouse
+          $whl = Get-ChildItem wheelhouse\*.whl | Select-Object -First 1
+          python -m zipfile -e $whl.FullName pyd
+          dumpbin /dependents pyd\networkit\base.pyd
+      - name: Fail if cibuildwheel failed
+        if: steps.cibw.outcome == 'failure'
+        run: exit 1
+
+  fix:
+    name: 'Windows abi3: fix (versioned Python library only in test builds)'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: 'win-${{ matrix.cibw_archs }}-cp315-${{ github.run_id }}'
-          path: ./wheelhouse/*cp315*.whl
-          retention-days: ${{ env.ARTIFACT_RETENTION }}
+          submodules: true
+      - name: 'Fix: link the versioned Python library only in test builds'
+        shell: python
+        run: |
+          import pathlib
+          p = pathlib.Path("CMakeLists.txt")
+          s = p.read_text()
+          old = "\t\t\ttarget_link_libraries(${TARGET_LIB} PRIVATE ${Python3_LIBRARIES})\n"
+          new = ("\t\t\tif(NETWORKIT_BUILD_TESTS)\n"
+                 "\t\t\t\ttarget_link_libraries(${TARGET_LIB} PRIVATE ${Python3_LIBRARIES})\n"
+                 "\t\t\tendif()\n")
+          assert s.count(old) == 1, s.count(old)
+          p.write_text(s.replace(old, new))
+          at = s.index(old)
+          print(p.read_text()[at - 120:at + 260])
+      - name: Setup devCmd (vstools)
+        uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build on 3.10, test on 3.10 to 3.15
+        id: cibw
+        continue-on-error: true
+        uses: pypa/cibuildwheel@v4.2.1
+        env:
+          CIBW_BEFORE_BUILD: pip install "cython<3.3.0" ipython
+          CIBW_ARCHS: "AMD64"
+          CIBW_BUILD: 'cp310-* cp311-* cp312-* cp313-* cp314-* cp315-*'
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: python .github/workflows/scripts/repair_windows_wheel.py --wheel {wheel} --dest-dir {dest_dir}
+          CIBW_SKIP: pp*
+          CIBW_TEST_COMMAND: python -c "import networkit"
+      - name: Show the DLL imports of base.pyd
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem wheelhouse
+          $whl = Get-ChildItem wheelhouse\*.whl | Select-Object -First 1
+          python -m zipfile -e $whl.FullName pyd
+          dumpbin /dependents pyd\networkit\base.pyd
+      - name: Fail if cibuildwheel failed
+        if: steps.cibw.outcome == 'failure'
+        run: exit 1
